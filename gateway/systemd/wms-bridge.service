@@ -1,0 +1,17 @@
+[Unit]
+Description=WMS Gateway MQTT SQLite Bridge and Cloud Forwarder
+After=network.target mosquitto.service
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/wms_gateway
+ExecStart=/usr/bin/python3 /home/pi/wms_gateway/bridge_mqtt.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

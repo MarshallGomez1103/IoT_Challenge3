@@ -1,0 +1,1445 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WMS V3.1 — Gemelo Digital 3D por Capas (ESP32 · Raspberry Pi 4 · Nube)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Three.js r128 + OrbitControls -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body, html {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #060b16;
+      font-family: 'Inter', sans-serif;
+      color: #f8fafc;
+      user-select: none;
+    }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+
+    #canvas-container {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    /* Paneles HUD con efecto cristal */
+    .hud-glass {
+      background: rgba(10, 17, 32, 0.84);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(56, 189, 248, 0.22);
+      box-shadow: 0 12px 35px -8px rgba(0, 0, 0, 0.7);
+    }
+
+    /* Sliders compactos */
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      background: #1e293b;
+      border-radius: 999px;
+      outline: none;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #38bdf8;
+      cursor: pointer;
+      border: 1.5px solid #fff;
+      box-shadow: 0 0 8px rgba(56, 189, 248, 0.8);
+    }
+
+    /* Modo captura limpia */
+    body.clean-capture .hud-ui {
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    body.clean-capture #exit-capture-btn {
+      display: flex !important;
+    }
+
+    /* Estilos compactos para sliders */
+    .slider-row {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .slider-label {
+      display: flex;
+      justify-content: space-between;
+      gap: 6px;
+      font-size: 9px;
+      color: #94a3b8;
+      white-space: nowrap;
+    }
+    .slider-val {
+      font-weight: bold;
+      color: #38bdf8;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+    }
+
+    @keyframes pulseDot {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.45); opacity: 0.55; }
+    }
+    .led-pulse { animation: pulseDot 1.6s infinite ease-in-out; }
+
+    /* Botones compactos del HUD inferior */
+    .hud-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      padding: 4px 8px;
+      border-radius: 7px;
+      border: 1px solid rgba(51, 65, 85, 0.8);
+      background: rgba(15, 23, 42, 0.7);
+      color: #cbd5e1;
+      font-size: 9px;
+      font-weight: 700;
+      line-height: 1.1;
+      white-space: nowrap;
+      transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+    }
+    .hud-pill:hover {
+      border-color: #38bdf8;
+      background: rgba(30, 41, 59, 0.95);
+      color: #f8fafc;
+    }
+    .hud-pill.is-active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #fff;
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Contenedor WebGL Three.js -->
+  <div id="canvas-container"></div>
+
+  <!-- Botón de salida del modo captura limpia -->
+  <div id="exit-capture-btn" class="hidden fixed bottom-4 right-4 z-50 hud-glass px-4 py-2 rounded-xl items-center gap-3 text-xs">
+    <span class="text-slate-300">📸 <b>Modo Captura Wiki Activo</b> (Presiona <b>ESC</b> para volver)</span>
+    <button onclick="downloadSnapshot()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-3 py-1 rounded-lg transition">
+      Descargar PNG
+    </button>
+    <button onclick="toggleCleanCapture()" class="bg-sky-600 hover:bg-sky-500 text-white font-semibold px-3 py-1 rounded-lg transition">
+      Mostrar HUD
+    </button>
+  </div>
+
+  <!-- HUD INFERIOR COMPACTO -->
+  <aside id="control-panel" class="hud-ui fixed bottom-3 left-1/2 -translate-x-1/2 z-20 w-[min(1180px,calc(100vw-16px))] pointer-events-none transition-opacity duration-300">
+    <div class="hud-glass rounded-2xl px-3 py-2 shadow-2xl pointer-events-auto">
+
+      <!-- Fila 1: marca, capas y estado -->
+      <div class="flex items-center gap-x-2 gap-y-1 flex-wrap">
+        <div class="flex items-center gap-1.5 pr-2 border-r border-slate-700/60">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 led-pulse"></span>
+          <span class="text-[11px] font-extrabold text-white tracking-tight whitespace-nowrap">WMS <span class="text-sky-400">V3.1</span></span>
+        </div>
+
+        <div class="flex items-center gap-1">
+          <button onclick="focusZone('all')" class="hud-pill" title="Vista general de la arquitectura">🗺️ Todo</button>
+          <button onclick="focusZone('node')" class="hud-pill" title="Nodo de campo ESP32">🟣 Campo</button>
+          <button onclick="focusZone('gateway')" class="hud-pill" title="Gateway Raspberry Pi 4">🟢 Gateway</button>
+          <button onclick="focusZone('cloud')" class="hud-pill" title="Ubidots e IA">🔵 Nube</button>
+        </div>
+
+        <div class="flex items-center gap-2 ml-auto">
+          <span class="text-[9px] text-slate-400 whitespace-nowrap">Riesgo <span id="hud-risk" class="text-[11px] font-extrabold text-emerald-400">22%</span></span>
+          <span id="alarm-pill" class="px-1.5 py-0.5 rounded text-[8px] font-bold bg-emerald-500/20 text-emerald-300 whitespace-nowrap">NORMAL</span>
+        </div>
+      </div>
+
+      <!-- Fila 2: sliders + acciones -->
+      <div class="flex items-end gap-2 mt-2 flex-wrap lg:flex-nowrap">
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-3 gap-y-1.5 flex-1 min-w-[260px]">
+          <div class="slider-row">
+            <div class="slider-label"><span>💧 Nivel</span> <span id="val-water" class="slider-val">5.4 cm</span></div>
+            <input id="sl-water" type="range" min="20" max="250" value="54" oninput="updateSimulation()" />
+          </div>
+          <div class="slider-row">
+            <div class="slider-label"><span>🌡️ Temp.</span> <span id="val-temp" class="slider-val">22.2 °C</span></div>
+            <input id="sl-temp" type="range" min="0" max="500" value="222" oninput="updateSimulation()" />
+          </div>
+          <div class="slider-row">
+            <div class="slider-label"><span>☁️ Humedad</span> <span id="val-hum" class="slider-val">66 %</span></div>
+            <input id="sl-hum" type="range" min="20" max="90" value="66" oninput="updateSimulation()" />
+          </div>
+          <div class="slider-row">
+            <div class="slider-label"><span>⏲️ Presión</span> <span id="val-pres" class="slider-val">754 hPa</span></div>
+            <input id="sl-pres" type="range" min="700" max="800" value="754" oninput="updateSimulation()" />
+          </div>
+          <div class="slider-row">
+            <div class="slider-label"><span>☀️ Luz</span> <span id="val-light" class="slider-val">88 %</span></div>
+            <input id="sl-light" type="range" min="0" max="100" value="88" oninput="updateSimulation()" />
+          </div>
+        </div>
+
+        <div class="flex items-center gap-1 lg:pl-2 lg:border-l lg:border-slate-700/60 flex-wrap">
+          <button onclick="triggerAckSilence()" class="hud-pill" style="background:#f59e0b;border-color:#fbbf24;color:#0f172a;" title="Silenciar la alarma">🔕 ACK</button>
+          <button onclick="toggleXRay()" id="btn-xray" class="hud-pill" title="Ver el interior del nodo">🩻 Rayos-X</button>
+          <button onclick="toggleAssembly()" id="btn-assembly" class="hud-pill" title="Montaje físico real">🧩 Ensamble</button>
+          <button onclick="toggleCleanCapture()" class="hud-pill" title="Ocultar el HUD para captura">📸 Captura</button>
+          <button onclick="downloadSnapshot()" class="hud-pill" style="background:#059669;border-color:#10b981;color:#fff;" title="Descargar PNG">💾 PNG</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <script>
+    // =========================================================================
+    // 1. CONFIGURACIÓN INICIAL DE THREE.JS Y ESCENA
+    // =========================================================================
+    const container = document.getElementById('canvas-container');
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x060b16);
+    scene.fog = new THREE.FogExp2(0x060b16, 0.012);
+
+    const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 200);
+    camera.position.set(19, 12.5, 25);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.target.set(5.2, 0.4, 0);
+    controls.maxPolarAngle = Math.PI * 0.85;
+    controls.minDistance = 6;
+    controls.maxDistance = 55;
+    controls.addEventListener('start', () => { camGoal = null; });
+
+    // Iluminación de estudio de ingeniería
+    const ambientLight = new THREE.AmbientLight(0xdbeafe, 0.65);
+    scene.add(ambientLight);
+
+    const keyLight = new THREE.DirectionalLight(0xffffff, 0.95);
+    keyLight.position.set(15, 25, 18);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.width = 2048;
+    keyLight.shadow.mapSize.height = 2048;
+    scene.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.4);
+    fillLight.position.set(-18, 10, -12);
+    scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0x10b981, 0.35);
+    rimLight.position.set(0, -12, 15);
+    scene.add(rimLight);
+
+    // Mesa / Grilla de laboratorio
+    const gridHelper = new THREE.GridHelper(44, 44, 0x1e293b, 0x0f172a);
+    gridHelper.position.y = -5.2;
+    scene.add(gridHelper);
+
+    // =========================================================================
+    // 2. GENERADOR DE TEXTURAS DINÁMICAS (LCD 16x2, CARTÓN KRAFT, ETIQUETAS)
+    // =========================================================================
+    const lcdCanvas = document.createElement('canvas');
+    lcdCanvas.width = 512;
+    lcdCanvas.height = 160;
+    const lcdCtx = lcdCanvas.getContext('2d');
+    const lcdTexture = new THREE.CanvasTexture(lcdCanvas);
+
+    let simState = {
+      distanceCm: 5.4,
+      riskPct: 22,
+      pressureHpa: 754,
+      lightPct: 88,
+      tempC: 22.2,
+      humPct: 66,
+      alarmAcked: false,
+      lcdPage: 0,
+      explodeFactor: 0,
+      xRay: false,
+      dbRows: 1284
+    };
+
+    function drawLcdScreen() {
+      // Fondo característico azul-cian brillante de LCD 16x2 retroiluminado (como en las fotos)
+      const grad = lcdCtx.createLinearGradient(0, 0, 512, 160);
+      grad.addColorStop(0, '#00d8ff');
+      grad.addColorStop(0.5, '#00b8f5');
+      grad.addColorStop(1, '#0095e8');
+      lcdCtx.fillStyle = grad;
+      lcdCtx.fillRect(0, 0, 512, 160);
+
+      // Matriz sutil de bloques de caracteres 16x2
+      lcdCtx.fillStyle = 'rgba(0, 45, 85, 0.14)';
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 16; c++) {
+          lcdCtx.fillRect(22 + c * 29.2, 22 + r * 62, 25, 52);
+        }
+      }
+
+      // Texto de matriz de puntos blanca brillante
+      lcdCtx.fillStyle = '#f8fafc';
+      lcdCtx.shadowColor = '#ffffff';
+      lcdCtx.shadowBlur = 4;
+      lcdCtx.font = 'bold 40px "JetBrains Mono", monospace';
+
+      if (simState.lcdPage === 0) {
+        const dStr = simState.distanceCm.toFixed(1);
+        const rStr = Math.round(simState.riskPct);
+        lcdCtx.fillText(`Dist: ${dStr} cm`, 26, 63);
+        lcdCtx.fillText(`Riesgo: ${rStr}%${simState.alarmAcked ? ' [ACK]' : ''}`, 26, 125);
+      } else {
+        const tStr = simState.tempC.toFixed(1);
+        lcdCtx.fillText(`T:${tStr}C H:${simState.humPct}%`, 26, 63);
+        lcdCtx.fillText(`Luz:${simState.lightPct}% P:${Math.round(simState.pressureHpa)}`, 26, 125);
+      }
+      lcdCtx.shadowBlur = 0;
+      lcdTexture.needsUpdate = true;
+    }
+    drawLcdScreen();
+
+    // Textura procedural de cartón/MDF beige kraft (fiel al chasis de las capturas)
+    function createKraftTexture() {
+      const c = document.createElement('canvas');
+      c.width = 256; c.height = 256;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#cbb799';
+      ctx.fillRect(0, 0, 256, 256);
+      for (let i = 0; i < 1800; i++) {
+        ctx.fillStyle = Math.random() > 0.5 ? 'rgba(160,138,108,0.18)' : 'rgba(230,215,190,0.16)';
+        ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+      }
+      return new THREE.CanvasTexture(c);
+    }
+    const kraftTexture = createKraftTexture();
+
+    // Texturas de texto para placas y pantallas holográficas
+    function makeTextTexture(title, subtitle, opts = {}) {
+      const w = opts.width || 512;
+      const h = opts.height || 160;
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      const accent = opts.accent || '#38bdf8';
+      ctx.fillStyle = opts.bg || 'rgba(8, 15, 30, 0.94)';
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = Math.max(3, w * 0.008);
+      ctx.strokeRect(5, 5, w - 10, h - 10);
+      ctx.fillStyle = accent;
+      ctx.fillRect(5, 5, Math.max(8, w * 0.02), h - 10);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = `bold ${Math.round(h * 0.27)}px Inter, sans-serif`;
+      ctx.fillText(title, w * 0.065, h * 0.47);
+      ctx.fillStyle = accent;
+      ctx.font = `500 ${Math.round(h * 0.17)}px "JetBrains Mono", monospace`;
+      ctx.fillText(subtitle, w * 0.065, h * 0.77);
+      const tex = new THREE.CanvasTexture(c);
+      tex.anisotropy = 4;
+      return tex;
+    }
+
+    // Textura de PCB verde con trazas, pads y serigrafía
+    function makePcbTexture() {
+      const c = document.createElement('canvas');
+      c.width = 512; c.height = 352;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#0b7a45';
+      ctx.fillRect(0, 0, 512, 352);
+
+      ctx.strokeStyle = 'rgba(52, 211, 153, 0.35)';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 22; i++) {
+        const x = 30 + Math.random() * 450;
+        const y = 30 + Math.random() * 290;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + 20 + Math.random() * 40, y);
+        ctx.lineTo(x + 20 + Math.random() * 40, y + 20 + Math.random() * 40);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = '#d4af37';
+      for (let i = 0; i < 60; i++) {
+        ctx.beginPath();
+        ctx.arc(20 + Math.random() * 472, 20 + Math.random() * 312, 2.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = 'bold 24px "JetBrains Mono", monospace';
+      ctx.fillText('Raspberry Pi 4 Model B', 118, 190);
+      ctx.fillStyle = '#a7f3d0';
+      ctx.font = '16px "JetBrains Mono", monospace';
+      ctx.fillText('WMS GATEWAY · REV 3.0', 118, 216);
+      ctx.fillText('MOSQUITTO · SQLITE', 118, 238);
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.anisotropy = 4;
+      return tex;
+    }
+
+    // =========================================================================
+    // 3. CONSTRUCCIÓN GEOMÉTRICA DE LAS 3 CAPAS FÍSICAS DEL WMS V3.0
+    // =========================================================================
+    const rootGroup = new THREE.Group();
+    scene.add(rootGroup);
+
+    // Grupos móviles para la vista explosionada
+    const reservoirGroup = new THREE.Group();
+    const enclosureWallsGroup = new THREE.Group();
+    const topWallGroup = new THREE.Group();
+    const frontFaceGroup = new THREE.Group();
+    const bottomSensorGroup = new THREE.Group();
+    const topSensorsGroup = new THREE.Group();
+    const rightSensorsGroup = new THREE.Group();
+    const leftCableGroup = new THREE.Group();
+    const internalEdgeGroup = new THREE.Group();
+    const gatewayGroup = new THREE.Group();
+    const cloudGroup = new THREE.Group();
+
+    rootGroup.add(
+      reservoirGroup,
+      enclosureWallsGroup,
+      topWallGroup,
+      frontFaceGroup,
+      bottomSensorGroup,
+      topSensorsGroup,
+      rightSensorsGroup,
+      leftCableGroup,
+      internalEdgeGroup,
+      gatewayGroup,
+      cloudGroup
+    );
+
+    // -------------------------------------------------------------------------
+    // A. RESERVORIO DE AGUA INFERIOR (TUPPER / TANQUE TRANSLÚCIDO DE PRUEBA)
+    // -------------------------------------------------------------------------
+    const tankWidth = 9.2, tankHeight = 3.6, tankDepth = 6.8;
+    const tankGeo = new THREE.BoxGeometry(tankWidth, tankHeight, tankDepth);
+    const tankMat = new THREE.MeshPhysicalMaterial({
+      color: 0xe2e8f0,
+      transparent: true,
+      opacity: 0.28,
+      roughness: 0.15,
+      transmission: 0.5,
+      side: THREE.DoubleSide
+    });
+    const tankMesh = new THREE.Mesh(tankGeo, tankMat);
+    tankMesh.position.set(0, -3.3, 0);
+    reservoirGroup.add(tankMesh);
+
+    // Reborde superior del contenedor plástico (como el tupper transparente del video)
+    const rimGeo = new THREE.BoxGeometry(tankWidth + 0.4, 0.22, tankDepth + 0.4);
+    const rimMesh = new THREE.Mesh(rimGeo, tankMat);
+    rimMesh.position.set(0, -1.6, 0);
+    reservoirGroup.add(rimMesh);
+
+    // Volumen de agua dinámico dentro del tanque
+    const waterGeo = new THREE.BoxGeometry(tankWidth - 0.25, 1, tankDepth - 0.25);
+    const waterMat = new THREE.MeshPhongMaterial({
+      color: 0x0ea5e9,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.18,
+      transparent: true,
+      opacity: 0.72,
+      shininess: 90
+    });
+    const waterMesh = new THREE.Mesh(waterGeo, waterMat);
+    waterMesh.position.set(0, -3.2, 0);
+    reservoirGroup.add(waterMesh);
+
+    // -------------------------------------------------------------------------
+    // B. CAJA DE BORDE WMS (CARCASA KRAFT/MDF 150x100x80mm SUSPENDIDA ARRIBA)
+    // -------------------------------------------------------------------------
+    const boxW = 7.4, boxH = 4.2, boxD = 4.8;
+    const boxCenterY = 2.6;
+    const wallThick = 0.16;
+
+    const enclosureMaterials = [];
+    function makeBoxWall(w, h, d, x, y, z, parent) {
+      const mat = new THREE.MeshStandardMaterial({
+        map: kraftTexture,
+        color: 0xd6c4a8,
+        roughness: 0.82,
+        metalness: 0.05,
+        transparent: true,
+        opacity: 1.0
+      });
+      enclosureMaterials.push(mat);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      parent.add(mesh);
+
+      // Bordes de corte de cartón/MDF
+      const edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(mesh.geometry),
+        new THREE.LineBasicMaterial({ color: 0x78664e, transparent: true, opacity: 0.55 })
+      );
+      mesh.add(edges);
+      return mesh;
+    }
+
+    // Paredes trasera, base, izquierda, derecha
+    makeBoxWall(boxW, boxH, wallThick, 0, boxCenterY, -boxD / 2, enclosureWallsGroup); // Trasera
+    makeBoxWall(boxW, wallThick, boxD, 0, boxCenterY - boxH / 2, 0, enclosureWallsGroup); // Base
+    makeBoxWall(wallThick, boxH, boxD, -boxW / 2, boxCenterY, 0, enclosureWallsGroup); // Izquierda
+    makeBoxWall(wallThick, boxH, boxD, boxW / 2, boxCenterY, 0, enclosureWallsGroup);  // Derecha
+
+    // Tapa superior y Cara frontal en grupos separados para abrirse en vista explosionada
+    makeBoxWall(boxW, wallThick, boxD, 0, boxCenterY + boxH / 2, 0, topWallGroup); // Tapa superior
+    makeBoxWall(boxW, boxH, wallThick, 0, boxCenterY, boxD / 2, frontFaceGroup);   // Frente
+
+    // Placa de anclaje industrial (B2G) uniendo ambas cajas
+    const backplate = new THREE.Mesh(
+      new THREE.BoxGeometry(6.5, 7.8, 0.25),
+      new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.6, metalness: 0.4 })
+    );
+    backplate.position.set(0, boxCenterY - 1.5, -boxD / 2 - 0.2);
+    enclosureWallsGroup.add(backplate);
+
+    // -------------------------------------------------------------------------
+    // C. CARA FRONTAL: PANTALLA LCD 16x2 CON BACKLIGHT CIAN
+    // -------------------------------------------------------------------------
+    const lcdBezel = new THREE.Mesh(
+      new THREE.BoxGeometry(4.9, 1.85, 0.25),
+      new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.4 })
+    );
+    lcdBezel.position.set(0, boxCenterY - 0.15, boxD / 2 + 0.08);
+    frontFaceGroup.add(lcdBezel);
+
+    const lcdScreenMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(4.45, 1.38),
+      new THREE.MeshBasicMaterial({ map: lcdTexture })
+    );
+    lcdScreenMesh.position.set(0, boxCenterY - 0.15, boxD / 2 + 0.22);
+    frontFaceGroup.add(lcdScreenMesh);
+
+    // Placa de identificación del nodo de campo (código de color violeta)
+    const nodePlate = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.1, 0.56),
+      new THREE.MeshBasicMaterial({
+        map: makeTextTexture('NODO IoT · ESP32', 'sensores + alarma in situ', { accent: '#a78bfa' }),
+        transparent: true
+      })
+    );
+    nodePlate.position.set(0, boxCenterY + 1.0, boxD / 2 + 0.2);
+    frontFaceGroup.add(nodePlate);
+
+    // -------------------------------------------------------------------------
+    // D. CARA INFERIOR: SENSOR ULTRASÓNICO HC-SR04 APUNTANDO AL AGUA
+    // -------------------------------------------------------------------------
+    const hcsrPcb = new THREE.Mesh(
+      new THREE.BoxGeometry(2.6, 0.12, 1.1),
+      new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.4 })
+    );
+    hcsrPcb.position.set(0, boxCenterY - boxH / 2 - 0.08, 0.2);
+    bottomSensorGroup.add(hcsrPcb);
+
+    const cylGeo = new THREE.CylinderGeometry(0.46, 0.46, 0.72, 28);
+    const cylMat = new THREE.MeshStandardMaterial({ color: 0xd1d5db, metalness: 0.85, roughness: 0.2 });
+    const meshMat = new THREE.MeshBasicMaterial({ color: 0x1f2937 });
+
+    [-0.68, 0.68].forEach(offsetX => {
+      const trans = new THREE.Mesh(cylGeo, cylMat);
+      trans.position.set(offsetX, boxCenterY - boxH / 2 - 0.42, 0.2);
+      bottomSensorGroup.add(trans);
+
+      const cap = new THREE.Mesh(new THREE.CircleGeometry(0.38, 20), meshMat);
+      cap.rotation.x = Math.PI / 2;
+      cap.position.set(offsetX, boxCenterY - boxH / 2 - 0.79, 0.2);
+      bottomSensorGroup.add(cap);
+    });
+
+    // Cono acústico ultrasónico de 15° hacia el agua
+    const sonicConeGeo = new THREE.ConeGeometry(1.45, 3.6, 24, 1, true);
+    const sonicConeMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.16,
+      wireframe: true,
+      side: THREE.DoubleSide
+    });
+    const sonicCone = new THREE.Mesh(sonicConeGeo, sonicConeMat);
+    sonicCone.position.set(0, -1.6, 0.2);
+    bottomSensorGroup.add(sonicCone);
+
+    // -------------------------------------------------------------------------
+    // E. CARA SUPERIOR: MÓDULO LDR (LUZ) Y MÓDULO PULSADOR ACK (COMO EN EL VIDEO)
+    // -------------------------------------------------------------------------
+    // 1. Módulo LDR (izquierda arriba, con LED indicador azul)
+    const ldrPcb = new THREE.Mesh(
+      new THREE.BoxGeometry(1.1, 0.1, 1.4),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 })
+    );
+    ldrPcb.position.set(-1.3, boxCenterY + boxH / 2 + 0.14, 0.3);
+    topSensorsGroup.add(ldrPcb);
+
+    const ldrHead = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.24, 0.24, 0.18, 18),
+      new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.3 })
+    );
+    ldrHead.position.set(-1.3, boxCenterY + boxH / 2 + 0.26, 0.65);
+    topSensorsGroup.add(ldrHead);
+
+    const ldrBlueLed = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
+    );
+    ldrBlueLed.position.set(-1.3, boxCenterY + boxH / 2 + 0.22, 0.1);
+    topSensorsGroup.add(ldrBlueLed);
+
+    // 2. Módulo Pulsador ACK (derecha arriba, con botón negro y LED rojo)
+    const btnPcb = new THREE.Mesh(
+      new THREE.BoxGeometry(1.2, 0.1, 1.4),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 })
+    );
+    btnPcb.position.set(1.2, boxCenterY + boxH / 2 + 0.14, 0.2);
+    topSensorsGroup.add(btnPcb);
+
+    const pushCap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.32, 0.32, 0.26, 20),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4 })
+    );
+    pushCap.position.set(1.2, boxCenterY + boxH / 2 + 0.28, 0.2);
+    topSensorsGroup.add(pushCap);
+
+    const btnRedLed = new THREE.Mesh(
+      new THREE.SphereGeometry(0.08, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xf43f5e })
+    );
+    btnRedLed.position.set(0.85, boxCenterY + boxH / 2 + 0.22, 0.5);
+    topSensorsGroup.add(btnRedLed);
+
+    // -------------------------------------------------------------------------
+    // F. CARA LATERAL DERECHA: LED RGB DIFUSO + DHT11 AZUL + BUZZER
+    // -------------------------------------------------------------------------
+    // Plaquita soporte lateral derecha (tal cual se ve donde lo sostienen con la mano)
+    const sideMountPcb = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, 2.2, 1.6),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a })
+    );
+    sideMountPcb.position.set(boxW / 2 + 0.14, boxCenterY + 0.2, 0.2);
+    rightSensorsGroup.add(sideMountPcb);
+
+    // Domo grande del LED RGB (Verde brillante en estado normal, Amarillo/Rojo en alerta)
+    const rgbDomeMat = new THREE.MeshStandardMaterial({
+      color: 0x10b981,
+      emissive: 0x10b981,
+      emissiveIntensity: 1.6,
+      roughness: 0.15,
+      transparent: true,
+      opacity: 0.92
+    });
+    const rgbDomeMesh = new THREE.Mesh(new THREE.SphereGeometry(0.46, 24, 24), rgbDomeMat);
+    rgbDomeMesh.position.set(boxW / 2 + 0.52, boxCenterY + 0.65, 0.2);
+    rightSensorsGroup.add(rgbDomeMesh);
+
+    const rgbPointLight = new THREE.PointLight(0x10b981, 1.4, 6);
+    rgbPointLight.position.set(boxW / 2 + 0.9, boxCenterY + 0.65, 0.2);
+    rightSensorsGroup.add(rgbPointLight);
+
+    // Sensor DHT11 (Carcasa azul característica en la parte baja lateral derecha)
+    const dhtMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.45, 0.95, 0.75),
+      new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.35 })
+    );
+    dhtMesh.position.set(boxW / 2 + 0.28, boxCenterY - 0.85, 0.35);
+    rightSensorsGroup.add(dhtMesh);
+
+    // Buzzer cilíndrico negro
+    const buzzerMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.32, 0.32, 0.35, 20),
+      new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.4 })
+    );
+    buzzerMesh.rotation.z = Math.PI / 2;
+    buzzerMesh.position.set(boxW / 2 + 0.28, boxCenterY - 0.15, -0.55);
+    rightSensorsGroup.add(buzzerMesh);
+
+    // -------------------------------------------------------------------------
+    // G. CARA LATERAL IZQUIERDA: CABLE USB BLANCO DE ALIMENTACIÓN 5V
+    // -------------------------------------------------------------------------
+    const usbPlug = new THREE.Mesh(
+      new THREE.BoxGeometry(0.7, 0.34, 0.52),
+      new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.3 })
+    );
+    usbPlug.position.set(-boxW / 2 - 0.35, boxCenterY + 0.3, 0);
+    leftCableGroup.add(usbPlug);
+
+    const cableCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(-boxW / 2 - 0.6, boxCenterY + 0.3, 0),
+      new THREE.Vector3(-boxW / 2 - 1.9, boxCenterY - 0.6, 0.3),
+      new THREE.Vector3(-boxW / 2 - 2.6, -2.5, 0.6),
+      new THREE.Vector3(-boxW / 2 - 3.1, -5.1, 1.0)
+    ]);
+    const usbCord = new THREE.Mesh(
+      new THREE.TubeGeometry(cableCurve, 28, 0.11, 12, false),
+      new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.4 })
+    );
+    leftCableGroup.add(usbCord);
+
+    // -------------------------------------------------------------------------
+    // H. INTERIOR DEL NODO BORDE: PROTOBOARD + ESP32 + BMP180 + DIVISOR 3.33V
+    // -------------------------------------------------------------------------
+    // Protoboard blanca interna
+    const protoboard = new THREE.Mesh(
+      new THREE.BoxGeometry(5.6, 0.28, 3.4),
+      new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.5 })
+    );
+    protoboard.position.set(0, boxCenterY - 1.35, 0);
+    internalEdgeGroup.add(protoboard);
+
+    // Placa ESP32 NodeMCU (PCB negra + módulo metálico ESP-WROOM-32)
+    const espPcb = new THREE.Mesh(
+      new THREE.BoxGeometry(3.1, 0.16, 1.6),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4 })
+    );
+    espPcb.position.set(-0.6, boxCenterY - 1.05, 0);
+    internalEdgeGroup.add(espPcb);
+
+    const espShield = new THREE.Mesh(
+      new THREE.BoxGeometry(1.7, 0.18, 1.25),
+      new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.85, roughness: 0.25 })
+    );
+    espShield.position.set(-0.35, boxCenterY - 0.92, 0);
+    internalEdgeGroup.add(espShield);
+
+    // Serigrafía del módulo ESP32 visible con Rayos-X
+    const espPlate = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.5, 0.92),
+      new THREE.MeshBasicMaterial({
+        map: makeTextTexture('ESP32', 'WROOM-32', { accent: '#a855f7', width: 256, height: 160 }),
+        transparent: true
+      })
+    );
+    espPlate.rotation.x = -Math.PI / 2;
+    espPlate.position.set(-0.35, boxCenterY - 0.82, 0);
+    internalEdgeGroup.add(espPlate);
+
+    // Sensor Barométrico BMP180 (I2C 0x77) montado en la protoboard
+    const bmpPcb = new THREE.Mesh(
+      new THREE.BoxGeometry(0.75, 0.12, 0.65),
+      new THREE.MeshStandardMaterial({ color: 0x7c3aed, roughness: 0.4 })
+    );
+    bmpPcb.position.set(1.85, boxCenterY - 1.12, -0.7);
+    internalEdgeGroup.add(bmpPcb);
+
+    // Resistencias del Divisor de Tensión (1kΩ y 2kΩ -> 3.33V para proteger GPIO 19 ECHO)
+    const resMat1 = new THREE.MeshStandardMaterial({ color: 0x38bdf8 });
+    const resMat2 = new THREE.MeshStandardMaterial({ color: 0xf59e0b });
+    const r1Mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.65, 12), resMat1);
+    r1Mesh.rotation.z = Math.PI / 2;
+    r1Mesh.position.set(1.55, boxCenterY - 1.05, 0.75);
+    internalEdgeGroup.add(r1Mesh);
+
+    const r2Mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.65, 12), resMat2);
+    r2Mesh.rotation.z = Math.PI / 2;
+    r2Mesh.position.set(1.55, boxCenterY - 1.05, 1.15);
+    internalEdgeGroup.add(r2Mesh);
+
+    // -------------------------------------------------------------------------
+    // I. CAPA 02 · GATEWAY RASPBERRY PI 4 (MOSQUITTO + SQLITE)
+    // -------------------------------------------------------------------------
+    // La Raspberry Pi se modela como una estación independiente para que se
+    // distinga claramente del nodo ESP32. En "Ensamble real" vuelve a su
+    // posición física acoplada bajo la caja del nodo.
+    const GATEWAY_ARCH = new THREE.Vector3(9.9, -4.15, 0.3);
+    const GATEWAY_ASSEMBLED = new THREE.Vector3(0, 0.2, -1.8);
+    gatewayGroup.position.copy(GATEWAY_ARCH);
+    cloudGroup.position.set(7.6, 4.8, -2.8);
+
+    // --- Pedestal técnico (solo en la vista de arquitectura) ----------------
+    const pedestalGroup = new THREE.Group();
+    gatewayGroup.add(pedestalGroup);
+
+    const pedestal = new THREE.Mesh(
+      new THREE.BoxGeometry(6.0, 0.45, 5.0),
+      new THREE.MeshStandardMaterial({ color: 0x0f1a2c, roughness: 0.55, metalness: 0.35 })
+    );
+    pedestal.position.set(0, -0.95, 0);
+    pedestal.castShadow = true;
+    pedestal.receiveShadow = true;
+    pedestalGroup.add(pedestal);
+
+    const pedestalTop = new THREE.Mesh(
+      new THREE.BoxGeometry(5.4, 0.06, 4.4),
+      new THREE.MeshStandardMaterial({ color: 0x0f2f26, emissive: 0x10b981, emissiveIntensity: 0.22, roughness: 0.4 })
+    );
+    pedestalTop.position.set(0, -0.70, 0);
+    pedestalGroup.add(pedestalTop);
+
+    [[-2.3, -1.9], [2.3, -1.9], [-2.3, 1.9], [2.3, 1.9]].forEach(([sx, sz]) => {
+      const leg = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.16, 0.55, 12),
+        new THREE.MeshStandardMaterial({ color: 0xb08d57, metalness: 0.9, roughness: 0.3 })
+      );
+      leg.position.set(sx, -0.42, sz);
+      pedestalGroup.add(leg);
+    });
+
+    const gatewayPlate = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.3, 0.62),
+      new THREE.MeshBasicMaterial({
+        map: makeTextTexture('GATEWAY · RPi 4', 'MQTT · SQLITE · WAN', { accent: '#10b981' }),
+        transparent: true
+      })
+    );
+    gatewayPlate.position.set(0, -0.95, 2.52);
+    pedestalGroup.add(gatewayPlate);
+
+    // --- Bandeja de montaje + PCB de la Raspberry Pi 4 ----------------------
+    const dockTray = new THREE.Mesh(
+      new THREE.BoxGeometry(5.3, 0.28, 3.8),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.7, metalness: 0.2 })
+    );
+    dockTray.position.set(0, -0.33, 0);
+    gatewayGroup.add(dockTray);
+
+    const rpiPcb = new THREE.Mesh(
+      new THREE.BoxGeometry(4.6, 0.16, 3.1),
+      new THREE.MeshStandardMaterial({ color: 0x0b7a45, roughness: 0.35, metalness: 0.15 })
+    );
+    rpiPcb.position.set(0, 0, 0);
+    rpiPcb.castShadow = true;
+    rpiPcb.receiveShadow = true;
+    gatewayGroup.add(rpiPcb);
+
+    const rpiTop = new THREE.Mesh(
+      new THREE.PlaneGeometry(4.5, 3.0),
+      new THREE.MeshStandardMaterial({ map: makePcbTexture(), roughness: 0.45 })
+    );
+    rpiTop.rotation.x = -Math.PI / 2;
+    rpiTop.position.set(0, 0.085, 0);
+    gatewayGroup.add(rpiTop);
+
+    const rpiMetal = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.85, roughness: 0.25 });
+    const rpiBlack = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.45 });
+    const rpiGold = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.3 });
+
+    // SoC BCM2711 + disipador de aluminio
+    const rpiCpu = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.2, 0.95), rpiMetal);
+    rpiCpu.position.set(-0.55, 0.18, 0.15);
+    gatewayGroup.add(rpiCpu);
+    for (let i = 0; i < 5; i++) {
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.16, 0.09), rpiMetal);
+      fin.position.set(-0.55, 0.33, -0.15 + i * 0.15);
+      gatewayGroup.add(fin);
+    }
+
+    // Chip de RAM y controlador USB
+    const rpiRam = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.12, 0.55), rpiBlack);
+    rpiRam.position.set(0.55, 0.14, 0.35);
+    gatewayGroup.add(rpiRam);
+
+    // Header GPIO de 40 pines
+    const rpiGpio = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.3, 0.32), rpiBlack);
+    rpiGpio.position.set(-0.55, 0.2, -1.28);
+    gatewayGroup.add(rpiGpio);
+    const gpioPins = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.06, 0.22), rpiGold);
+    gpioPins.position.set(-0.55, 0.37, -1.28);
+    gatewayGroup.add(gpioPins);
+
+    // Ethernet + 2 USB 3.0 (azul) + 1 USB 2.0 (negro)
+    const ethPort = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.72, 0.8), rpiMetal);
+    ethPort.position.set(1.85, 0.42, -1.05);
+    gatewayGroup.add(ethPort);
+
+    const usb3Mat = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.4 });
+    [-0.25, 0.5].forEach(z => {
+      const p = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.72, 0.68), usb3Mat);
+      p.position.set(1.85, 0.42, z);
+      gatewayGroup.add(p);
+      const inner = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.5, 0.5), rpiBlack);
+      inner.position.set(1.95, 0.42, z);
+      gatewayGroup.add(inner);
+    });
+
+    const usb2 = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.72, 0.68), rpiBlack);
+    usb2.position.set(1.85, 0.42, 1.2);
+    gatewayGroup.add(usb2);
+
+    // 2 micro-HDMI + USB-C de alimentación + microSD
+    [-0.15, 0.5].forEach(z => {
+      const hdmi = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.32, 0.55), rpiBlack);
+      hdmi.position.set(-2.28, 0.3, z);
+      gatewayGroup.add(hdmi);
+    });
+    const rpiUsbc = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.28, 0.45), rpiBlack);
+    rpiUsbc.position.set(-2.28, 0.28, 1.15);
+    gatewayGroup.add(rpiUsbc);
+    const sdCard = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.5), rpiBlack);
+    sdCard.position.set(2.33, 0.12, 1.5);
+    gatewayGroup.add(sdCard);
+
+    // Agujeros de montaje dorados
+    [[-2.0, -1.3], [2.0, -1.3], [-2.0, 1.3], [2.0, 1.3]].forEach(([hx, hz]) => {
+      const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.22, 12), rpiGold);
+      hole.position.set(hx, 0.09, hz);
+      gatewayGroup.add(hole);
+    });
+
+    // --- Servicios holográficos del gateway: Mosquitto + SQLite -------------
+    const gatewayHoloGroup = new THREE.Group();
+    gatewayGroup.add(gatewayHoloGroup);
+
+    // Nodo Mosquitto (broker MQTT)
+    const mqttNode = new THREE.Group();
+    mqttNode.position.set(-0.95, 1.9, 0.1);
+    gatewayHoloGroup.add(mqttNode);
+
+    const mqttBoxMat = new THREE.MeshStandardMaterial({
+      color: 0x0b2a4a, emissive: 0x0284c7, emissiveIntensity: 0.35,
+      transparent: true, opacity: 0.9, roughness: 0.3
+    });
+    const mqttBox = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.15, 1.2), mqttBoxMat);
+    mqttNode.add(mqttBox);
+    mqttNode.add(new THREE.LineSegments(
+      new THREE.EdgesGeometry(mqttBox.geometry),
+      new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.9 })
+    ));
+
+    const mqttScreen = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.9, 0.72),
+      new THREE.MeshBasicMaterial({
+        map: makeTextTexture('MOSQUITTO', 'broker MQTT :1883', { accent: '#38bdf8', width: 512, height: 200 }),
+        transparent: true
+      })
+    );
+    mqttScreen.position.set(0, 0, 0.61);
+    mqttNode.add(mqttScreen);
+
+    const antenna = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.045, 0.045, 0.75, 8),
+      new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8, roughness: 0.3 })
+    );
+    antenna.position.set(0, 0.95, 0);
+    mqttNode.add(antenna);
+    const antennaTip = new THREE.Mesh(
+      new THREE.SphereGeometry(0.1, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
+    );
+    antennaTip.position.set(0, 1.35, 0);
+    mqttNode.add(antennaTip);
+
+    const mqttRings = [];
+    for (let i = 0; i < 3; i++) {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.3, 0.025, 8, 32),
+        new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.7 })
+      );
+      ring.rotation.x = Math.PI / 2;
+      ring.position.set(0, 1.25, 0);
+      mqttNode.add(ring);
+      mqttRings.push(ring);
+    }
+
+    // Nodo SQLite (base de datos local)
+    const sqliteNode = new THREE.Group();
+    sqliteNode.position.set(1.35, 1.65, 0.35);
+    gatewayHoloGroup.add(sqliteNode);
+
+    const sqliteMat = new THREE.MeshStandardMaterial({
+      color: 0x065f46, emissive: 0x10b981, emissiveIntensity: 0.35,
+      transparent: true, opacity: 0.88, roughness: 0.3
+    });
+    for (let i = 0; i < 3; i++) {
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.52, 0.2, 24), sqliteMat);
+      disc.position.y = i * 0.27;
+      sqliteNode.add(disc);
+    }
+    const sqliteRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.62, 0.03, 8, 32),
+      new THREE.MeshBasicMaterial({ color: 0x34d399, transparent: true, opacity: 0.85 })
+    );
+    sqliteRing.rotation.x = Math.PI / 2;
+    sqliteRing.position.y = 0.27;
+    sqliteNode.add(sqliteRing);
+
+    // Pantalla de estado local del gateway
+    const gwScreenCanvas = document.createElement('canvas');
+    gwScreenCanvas.width = 512;
+    gwScreenCanvas.height = 220;
+    const gwScreenCtx = gwScreenCanvas.getContext('2d');
+    const gwScreenTex = new THREE.CanvasTexture(gwScreenCanvas);
+
+    function drawGatewayScreen() {
+      const ctx = gwScreenCtx;
+      ctx.fillStyle = 'rgba(4, 10, 20, 0.96)';
+      ctx.fillRect(0, 0, 512, 220);
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(4, 4, 504, 212);
+      ctx.fillStyle = '#10b981';
+      ctx.fillRect(4, 4, 8, 212);
+
+      ctx.textAlign = 'left';
+      ctx.font = 'bold 34px Inter, sans-serif';
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText('GATEWAY · RPi 4', 26, 48);
+
+      ctx.font = '22px "JetBrains Mono", monospace';
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillText('MQTT :1883', 26, 92);
+      ctx.fillStyle = '#34d399';
+      ctx.fillText('● ONLINE', 330, 92);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText('SQLite', 26, 132);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText(`${simState.dbRows.toLocaleString('es-CO')} filas`, 200, 132);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText('Ubidots', 26, 172);
+      ctx.fillStyle = '#a78bfa';
+      ctx.fillText('● SYNC', 330, 172);
+
+      ctx.fillStyle = '#475569';
+      ctx.font = '17px "JetBrains Mono", monospace';
+      ctx.fillText(`WLAN local · riesgo ${Math.round(simState.riskPct)}%`, 26, 202);
+
+      gwScreenTex.needsUpdate = true;
+    }
+    drawGatewayScreen();
+
+    const gwScreenStand = new THREE.Mesh(
+      new THREE.BoxGeometry(2.25, 1.0, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.6 })
+    );
+    gwScreenStand.position.set(-1.95, 0.62, 1.72);
+    gwScreenStand.rotation.set(-0.06, 0.3, 0);
+    gatewayHoloGroup.add(gwScreenStand);
+
+    const gwScreen = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.05, 0.88),
+      new THREE.MeshBasicMaterial({ map: gwScreenTex, transparent: true })
+    );
+    gwScreen.position.set(-1.95, 0.62, 1.76);
+    gwScreen.rotation.set(-0.06, 0.3, 0);
+    gatewayHoloGroup.add(gwScreen);
+
+    // -------------------------------------------------------------------------
+    // J. CAPA 03 · NUBE: UBIDOTS + MÓDULO DE IA
+    // -------------------------------------------------------------------------
+    const cloudMat = new THREE.MeshStandardMaterial({
+      color: 0xdbeafe, emissive: 0x1d4ed8, emissiveIntensity: 0.25,
+      transparent: true, opacity: 0.92, roughness: 0.6
+    });
+    [
+      [0, 0, 0, 1.0], [-0.95, 0.15, 0.05, 0.72], [0.95, 0.12, 0.0, 0.78],
+      [0.42, 0.55, 0.05, 0.6], [-0.48, 0.5, -0.05, 0.56]
+    ].forEach(([x, y, z, r]) => {
+      const puff = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 20), cloudMat);
+      puff.position.set(x, y, z);
+      puff.scale.z = 0.72;
+      cloudGroup.add(puff);
+    });
+
+    // Panel del dashboard global (Ubidots)
+    const dashCanvas = document.createElement('canvas');
+    dashCanvas.width = 640;
+    dashCanvas.height = 360;
+    const dashCtx = dashCanvas.getContext('2d');
+    (function drawDashboard() {
+      const ctx = dashCtx;
+      ctx.fillStyle = 'rgba(8, 13, 28, 0.96)';
+      ctx.fillRect(0, 0, 640, 360);
+      ctx.strokeStyle = '#6366f1';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(5, 5, 630, 350);
+      ctx.fillStyle = '#6366f1';
+      ctx.fillRect(5, 5, 10, 350);
+
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = 'bold 42px Inter, sans-serif';
+      ctx.fillText('UBIDOTS', 36, 66);
+      ctx.fillStyle = '#a5b4fc';
+      ctx.font = '22px "JetBrains Mono", monospace';
+      ctx.fillText('dashboard global · MQTT / HTTPS', 36, 100);
+
+      const cards = [
+        ['NIVEL', '78 %', '#38bdf8'],
+        ['RIESGO', '22 %', '#34d399'],
+        ['TEMP', '22.2 °C', '#f59e0b']
+      ];
+      cards.forEach(([k, v, c], i) => {
+        const x = 36 + i * 190;
+        ctx.fillStyle = 'rgba(30, 41, 59, 0.8)';
+        ctx.fillRect(x, 128, 170, 82);
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '18px "JetBrains Mono", monospace';
+        ctx.fillText(k, x + 14, 156);
+        ctx.fillStyle = c;
+        ctx.font = 'bold 30px Inter, sans-serif';
+        ctx.fillText(v, x + 14, 194);
+      });
+
+      ctx.strokeStyle = 'rgba(99, 102, 241, 0.35)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 4; i++) {
+        ctx.beginPath();
+        ctx.moveTo(36, 240 + i * 26);
+        ctx.lineTo(604, 240 + i * 26);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = '#818cf8';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      const pts = [0.55, 0.5, 0.62, 0.45, 0.58, 0.35, 0.42, 0.3, 0.38];
+      pts.forEach((p, i) => {
+        const x = 36 + i * 71;
+        const y = 330 - p * 100;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      ctx.fillStyle = '#475569';
+      ctx.font = '16px "JetBrains Mono", monospace';
+      ctx.fillText('últimas 24 h', 36, 348);
+      ctx.fillStyle = '#34d399';
+      ctx.fillText('● conectado', 500, 348);
+    })();
+    const dashTex = new THREE.CanvasTexture(dashCanvas);
+    const dashPanel = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.5, 1.97),
+      new THREE.MeshBasicMaterial({ map: dashTex, transparent: true })
+    );
+    dashPanel.position.set(0, -1.55, 0.55);
+    dashPanel.rotation.x = -0.1;
+    cloudGroup.add(dashPanel);
+
+    // Nodo de IA (Gemini)
+    const aiGroup = new THREE.Group();
+    aiGroup.position.set(2.6, -0.55, 0.25);
+    cloudGroup.add(aiGroup);
+    const aiCore = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.55, 0),
+      new THREE.MeshStandardMaterial({
+        color: 0x7c3aed, emissive: 0x8b5cf6, emissiveIntensity: 0.9,
+        roughness: 0.2, metalness: 0.3
+      })
+    );
+    aiGroup.add(aiCore);
+    const aiWire = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.85, 0),
+      new THREE.MeshBasicMaterial({ color: 0xc4b5fd, wireframe: true, transparent: true, opacity: 0.5 })
+    );
+    aiGroup.add(aiWire);
+
+    // =========================================================================
+    // 4. ENLACES MQTT Y PAQUETES ANIMADOS ENTRE LAS TRES CAPAS
+    // =========================================================================
+    function makeDashedLink(color) {
+      const line = new THREE.Line(
+        new THREE.BufferGeometry(),
+        new THREE.LineDashedMaterial({ color, dashSize: 0.32, gapSize: 0.2, transparent: true, opacity: 0.85 })
+      );
+      scene.add(line);
+      return line;
+    }
+    const linkUplink = makeDashedLink(0x10b981);
+    const linkCloud = makeDashedLink(0x38bdf8);
+    const linkAck = makeDashedLink(0xf59e0b);
+
+    const curves = { up: null, cloud: null, ack: null };
+
+    function setDashedLink(line, start, control, end) {
+      const curve = new THREE.QuadraticBezierCurve3(start, control, end);
+      line.geometry.setFromPoints(curve.getPoints(40));
+      line.computeLineDistances();
+      return curve;
+    }
+
+    const mosqWorld = new THREE.Vector3();
+    const cloudWorld = new THREE.Vector3();
+
+    function updateConnections() {
+      mqttNode.getWorldPosition(mosqWorld);
+      cloudGroup.getWorldPosition(cloudWorld);
+
+      const nodeOut = new THREE.Vector3(boxW / 2 + 0.2, boxCenterY - 0.55, 0.8);
+      const mosqIn = new THREE.Vector3(mosqWorld.x, mosqWorld.y - 0.62, mosqWorld.z + 0.25);
+      const c1 = new THREE.Vector3(
+        (nodeOut.x + mosqIn.x) / 2, (nodeOut.y + mosqIn.y) / 2 + 2.6, 1.3
+      );
+      curves.up = setDashedLink(linkUplink, nodeOut, c1, mosqIn);
+
+      const cloudIn = new THREE.Vector3(cloudWorld.x, cloudWorld.y - 1.0, cloudWorld.z + 0.3);
+      const c2 = new THREE.Vector3((mosqWorld.x + cloudIn.x) / 2 + 1.4, (mosqWorld.y + cloudIn.y) / 2, -0.6);
+      curves.cloud = setDashedLink(
+        linkCloud,
+        new THREE.Vector3(mosqWorld.x + 0.3, mosqWorld.y + 0.7, mosqWorld.z + 0.1),
+        c2,
+        cloudIn
+      );
+
+      const ackStart = new THREE.Vector3(cloudWorld.x - 1.3, cloudWorld.y - 0.25, cloudWorld.z - 0.2);
+      const ackEnd = new THREE.Vector3(boxW / 2 - 0.3, boxCenterY + 1.1, -1.0);
+      const c3 = new THREE.Vector3(6.6, 7.8, -3.0);
+      curves.ack = setDashedLink(linkAck, ackStart, c3, ackEnd);
+    }
+    updateConnections();
+
+    // Paquetes viajando por los tres enlaces
+    const packets = [];
+    [
+      { getCurve: () => curves.up, color: 0x10b981, count: 4, speed: 0.22 },
+      { getCurve: () => curves.cloud, color: 0x38bdf8, count: 3, speed: 0.18 },
+      { getCurve: () => curves.ack, color: 0xf59e0b, count: 2, speed: 0.15 }
+    ].forEach(cfg => {
+      for (let i = 0; i < cfg.count; i++) {
+        const pMesh = new THREE.Mesh(
+          new THREE.SphereGeometry(0.13, 10, 10),
+          new THREE.MeshBasicMaterial({ color: cfg.color })
+        );
+        scene.add(pMesh);
+        packets.push({ mesh: pMesh, t: i / cfg.count, getCurve: cfg.getCurve, speed: cfg.speed });
+      }
+    });
+
+    // Transición entre la vista de arquitectura y el ensamble físico real
+    const gatewayGoal = GATEWAY_ARCH.clone();
+    let assembled = false;
+
+    function toggleAssembly() {
+      assembled = !assembled;
+      gatewayGoal.copy(assembled ? GATEWAY_ASSEMBLED : GATEWAY_ARCH);
+      pedestalGroup.visible = !assembled;
+      gatewayHoloGroup.visible = !assembled;
+      const btn = document.getElementById('btn-assembly');
+      btn.textContent = assembled ? '🗺️ Arquitectura' : '🧩 Ensamble';
+      btn.classList.toggle('is-active', assembled);
+      if (assembled) focusZone('node'); else focusZone('all');
+    }
+
+    // Enfoque suave de cámara por capas
+    let camGoal = null;
+
+    function focusZone(zone) {
+      if (zone === 'node') {
+        camGoal = { pos: new THREE.Vector3(11, 8, 18), target: new THREE.Vector3(0, 1.0, 0) };
+      } else if (zone === 'gateway') {
+        camGoal = { pos: new THREE.Vector3(16.5, 2.5, 10.5), target: new THREE.Vector3(9.9, -2.6, 0.3) };
+      } else if (zone === 'cloud') {
+        camGoal = { pos: new THREE.Vector3(15, 9.5, 8), target: new THREE.Vector3(7.6, 4.4, -2.2) };
+      } else {
+        camGoal = { pos: new THREE.Vector3(19, 12.5, 25), target: new THREE.Vector3(5.2, 0.4, 0) };
+      }
+    }
+
+    // =========================================================================
+    // 6. FUNCIONES INTERACTIVAS Y SIMULADOR MULTIVARIABLE
+    // =========================================================================
+    function toggleXRay() {
+      simState.xRay = !simState.xRay;
+      const btn = document.getElementById('btn-xray');
+      enclosureMaterials.forEach(m => {
+        m.opacity = simState.xRay ? 0.22 : 1.0;
+        m.needsUpdate = true;
+      });
+      if (simState.xRay) {
+        btn.classList.add('is-active');
+      } else {
+        btn.classList.remove('is-active');
+      }
+    }
+
+    function updateSimulation() {
+      // Capturar valores de todos los sliders
+      simState.distanceCm = parseFloat(document.getElementById('sl-water').value) / 10;
+      simState.tempC = parseFloat(document.getElementById('sl-temp').value) / 10;
+      simState.humPct = parseFloat(document.getElementById('sl-hum').value);
+      simState.pressureHpa = parseFloat(document.getElementById('sl-pres').value);
+      simState.lightPct = parseFloat(document.getElementById('sl-light').value);
+      
+      simState.alarmAcked = false;
+
+      // Actualizar textos en la UI
+      document.getElementById('val-water').textContent = `${simState.distanceCm.toFixed(1)} cm`;
+      document.getElementById('val-temp').textContent = `${simState.tempC.toFixed(1)} °C`;
+      document.getElementById('val-hum').textContent = `${simState.humPct.toFixed(0)} %`;
+      document.getElementById('val-pres').textContent = `${simState.pressureHpa.toFixed(0)} hPa`;
+      document.getElementById('val-light').textContent = `${simState.lightPct.toFixed(0)} %`;
+
+      // Calcular Riesgo de Nivel (5 cm = 100% Lleno / Riesgo 0%, 20 cm = 0% Lleno / Riesgo 100%)
+      const fillRatio = Math.max(0, Math.min(1, (20 - simState.distanceCm) / (20 - 5)));
+      const levelRisk = (1 - fillRatio) * 100;
+
+      // Calcular Índice Ambiental (Altas Temp/Luz y Baja Humedad aumentan el riesgo)
+      // Normalización simplificada para el simulador interactivo
+      const normTemp = simState.tempC / 50;
+      const normLight = simState.lightPct / 100;
+      const normHumInv = 1 - (simState.humPct / 100);
+      const envRisk = (normTemp * 0.4 + normLight * 0.4 + normHumInv * 0.2) * 100;
+
+      // Fusión 80/20 (80% Nivel Físico + 20% Evaporación/Clima)
+      simState.riskPct = Math.min(99, Math.max(0, 0.80 * levelRisk + 0.20 * envRisk));
+
+      // Actualizar geometría 3D del agua
+      const waterH = 0.35 + fillRatio * 2.55;
+      waterMesh.scale.y = waterH;
+      waterMesh.position.y = -4.95 + waterH / 2;
+
+      // Actualizar texto HUD Principal
+      const riskEl = document.getElementById('hud-risk');
+      const pillEl = document.getElementById('alarm-pill');
+      riskEl.textContent = `${Math.round(simState.riskPct)}%`;
+
+      // Lógica de Alarma: Tipo 1 (>85%), Tipo 2 (>=70%), Normal (<70%)
+      if (simState.riskPct >= 85) {
+        rgbDomeMat.color.setHex(0xf43f5e);
+        rgbDomeMat.emissive.setHex(0xf43f5e);
+        rgbPointLight.color.setHex(0xf43f5e);
+        riskEl.className = 'text-xs font-extrabold text-rose-400';
+        pillEl.className = 'px-1.5 py-0.5 rounded font-bold bg-rose-500/20 text-rose-300';
+        pillEl.textContent = 'CRÍTICA (>85%)';
+      } else if (simState.riskPct >= 70) {
+        rgbDomeMat.color.setHex(0xf59e0b);
+        rgbDomeMat.emissive.setHex(0xf59e0b);
+        rgbPointLight.color.setHex(0xf59e0b);
+        riskEl.className = 'text-xs font-extrabold text-amber-400';
+        pillEl.className = 'px-1.5 py-0.5 rounded font-bold bg-amber-500/20 text-amber-300';
+        pillEl.textContent = 'PREVENTIVA (≥70%)';
+      } else {
+        rgbDomeMat.color.setHex(0x10b981);
+        rgbDomeMat.emissive.setHex(0x10b981);
+        rgbPointLight.color.setHex(0x10b981);
+        riskEl.className = 'text-xs font-extrabold text-emerald-400';
+        pillEl.className = 'px-1.5 py-0.5 rounded font-bold bg-emerald-500/20 text-emerald-300';
+        pillEl.textContent = 'NORMAL';
+      }
+
+      // Forzar redraw del LCD y de la pantalla del gateway
+      drawLcdScreen();
+      drawGatewayScreen();
+    }
+
+    function triggerAckSilence() {
+      simState.alarmAcked = true;
+      const pillEl = document.getElementById('alarm-pill');
+      pillEl.className = 'px-1.5 py-0.5 rounded font-bold bg-sky-500/20 text-sky-300';
+      pillEl.textContent = 'SILENCIADA (ACK)';
+      rgbDomeMat.emissiveIntensity = 0.45;
+      drawLcdScreen();
+    }
+
+    function toggleCleanCapture() {
+      document.body.classList.toggle('clean-capture');
+    }
+
+    function downloadSnapshot() {
+      renderer.render(scene, camera);
+      const dataUrl = renderer.domElement.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = 'wms_v3_1_gemelo_digital_3d.png';
+      a.click();
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.body.classList.contains('clean-capture')) {
+        document.body.classList.remove('clean-capture');
+      }
+    });
+
+    // Alternar automáticamente las dos páginas del LCD y avanzar el contador SQLite
+    setInterval(() => {
+      simState.lcdPage = simState.lcdPage === 0 ? 1 : 0;
+      drawLcdScreen();
+      simState.dbRows += Math.floor(Math.random() * 4) + 1;
+      drawGatewayScreen();
+    }, 3800);
+
+    // =========================================================================
+    // 7. BUCLE DE ANIMACIÓN Y PROYECCIÓN DE ETIQUETAS 3D
+    // =========================================================================
+    const clock = new THREE.Clock();
+    const tempVec = new THREE.Vector3();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.05);
+      const elapsed = clock.elapsedTime;
+
+      controls.update();
+
+      // Transición del gateway entre "arquitectura" y "ensamble real"
+      gatewayGroup.position.lerp(gatewayGoal, 0.08);
+
+      // Enfoque suave de cámara
+      if (camGoal) {
+        camera.position.lerp(camGoal.pos, 0.07);
+        controls.target.lerp(camGoal.target, 0.07);
+        if (camera.position.distanceTo(camGoal.pos) < 0.2) camGoal = null;
+      }
+
+      // Enlaces MQTT y paquetes en movimiento
+      updateConnections();
+      packets.forEach(p => {
+        p.t = (p.t + dt * p.speed) % 1;
+        const curve = p.getCurve();
+        if (curve) p.mesh.position.copy(curve.getPoint(p.t));
+      });
+
+      // Animaciones de sensores y servicios
+      sonicCone.rotation.y = elapsed * 0.9;
+      sqliteRing.rotation.z = elapsed * 0.8;
+      aiCore.rotation.y = elapsed * 0.9;
+      aiCore.rotation.x = Math.sin(elapsed * 0.7) * 0.25;
+      aiWire.rotation.y = -elapsed * 0.6;
+      mqttRings.forEach((ring, i) => {
+        const t = ((elapsed * 0.55) + i / mqttRings.length) % 1;
+        ring.scale.setScalar(0.35 + t * 2.1);
+        ring.material.opacity = 0.75 * (1 - t);
+      });
+
+      // Parpadeo de alarma si está en estado crítico/preventivo y no silenciada
+      if (simState.riskPct >= 70 && !simState.alarmAcked) {
+        rgbDomeMat.emissiveIntensity = 1.1 + Math.sin(elapsed * 10) * 0.8;
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    window.onload = function () {
+      updateSimulation();   // Iniciar simulación con valores por defecto
+      updateConnections();  // Trazar enlaces MQTT entre capas
+      animate();
+    };
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
