@@ -1,6 +1,6 @@
 # WMS · Water Management System
 
-[![GitHub Pages](https://img.shields.io/badge/Gemelo%20Digital%203D-GitHub%20Pages-0ea5e9?style=for-the-badge&logo=three.js)](https://marshallgomez1103.github.io/IoT_Challenge3/)
+[![Netlify](https://img.shields.io/badge/Gemelo%20Digital%203D-Netlify-00ad9f?style=for-the-badge&logo=netlify)](https://fancy-faloodeh-f69a43.netlify.app/)
 [![Wiki Oficial](https://img.shields.io/badge/Wiki%20T%C3%A9cnica-12%20M%C3%B3dulos-6366f1?style=for-the-badge&logo=github)](https://github.com/MarshallGomez1103/IoT_Challenge3/wiki)
 [![License: MIT](https://img.shields.io/badge/License-MIT-emerald?style=for-the-badge)](LICENSE)
 [![Hardware](https://img.shields.io/badge/Hardware-ESP32%20%2B%20RPi%205-orange?style=for-the-badge)](docs/)
@@ -13,7 +13,7 @@ Sistema distribuido de monitoreo, telemetría y alerta temprana para la gestión
 
 El proyecto cuenta con un gemelo digital interactivo desarrollado en **Three.js** con simulación dinámica de la columna de agua, sombreado fotométrico y visualización por capas arquitectónicas:
 
-👉 **[Acceder al Gemelo Digital en GitHub Pages](https://marshallgomez1103.github.io/IoT_Challenge3/)**
+👉 **[Acceder al Gemelo Digital en Netlify](https://fancy-faloodeh-f69a43.netlify.app/)**
 
 ---
 
@@ -86,7 +86,6 @@ IoT_Challenge3/
 │   ├── plano_hardware_wms_v3_4k.png  # Plano esquemático de hardware en 4K
 │   ├── plano_wms_alta_resolucion.png # Plano de conexiones de alta resolución
 │   └── gemelo_digital_3d.html        # Respaldo local del visor Three.js
-├── index.html                        # Visor 3D desplegado en GitHub Pages
 ├── LICENSE                           # Licencia MIT
 └── README.md                         # Esta guía
 ```

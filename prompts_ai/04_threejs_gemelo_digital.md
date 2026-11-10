@@ -16,4 +16,4 @@
 Suministró la estructura base en HTML/JavaScript con importación por CDN de Three.js y OrbitControls, habilitando sombras fotométricas y materiales físicos transparentes (`MeshPhysicalMaterial`) para el cilindro de agua.
 
 ## Aplicación Técnica
-Base del gemelo digital 3D publicado en la raíz del repositorio (`index.html`) para despliegue en GitHub Pages.
+Base del gemelo digital 3D interactivo desplegado en producción en Netlify: <https://fancy-faloodeh-f69a43.netlify.app/>.
