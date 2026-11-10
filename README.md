@@ -79,6 +79,9 @@ IoT_Challenge3/
 │   ├── requirements.txt              # Dependencias de Python
 │   └── systemd/
 │       └── wms-bridge.service        # Servicio systemd de autoarranque
+├── prompts_ai/                       # Auditoría y registro de prompts de IA
+│   ├── README.md                     # Índice de prompts y políticas éticas
+│   └── *.md                          # Transcripciones y aplicación técnica
 ├── docs/
 │   ├── plano_hardware_wms_v3_4k.png  # Plano esquemático de hardware en 4K
 │   ├── plano_wms_alta_resolucion.png # Plano de conexiones de alta resolución
